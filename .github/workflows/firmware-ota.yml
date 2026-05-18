@@ -78,31 +78,6 @@ jobs:
       - name: Install paho-mqtt
         run: pip install paho-mqtt
 
-      - name: Write MQTT publish script
-        shell: pwsh
-        run: |
-          $script = @'
-import paho.mqtt.publish as publish
-import json, os
-payload = json.dumps({
-    "version":  os.environ["OTA_VERSION"],
-    "url":      os.environ["OTA_URL"],
-    "severity": os.environ["OTA_SEVERITY"],
-    "sha":      os.environ["OTA_SHA"]
-})
-print("OTA Payload:", payload)
-publish.single(
-    topic    = os.environ["MQTT_TOPIC"],
-    payload  = payload,
-    hostname = os.environ["MQTT_BROKER"],
-    port     = int(os.environ["MQTT_PORT"]),
-    qos      = 1,
-    retain   = True
-)
-print("OTA published successfully.")
-'@
-          $script | Out-File -FilePath publish_ota.py -Encoding utf8
-
       - name: Publish OTA via MQTT
         shell: pwsh
         env:
@@ -113,4 +88,4 @@ print("OTA published successfully.")
           MQTT_BROKER: ${{ env.MQTT_BROKER }}
           MQTT_PORT: ${{ env.MQTT_PORT }}
           MQTT_TOPIC: ${{ env.MQTT_TOPIC }}
-        run: python publish_ota.py
+        run: python scripts/publish_ota.py
