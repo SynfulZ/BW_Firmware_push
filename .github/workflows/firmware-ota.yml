@@ -1,0 +1,130 @@
+name: Firmware Build & OTA
+
+on:
+  push:
+    branches: [main]
+
+env:
+  BUILD_TARGET: 8850CM_V1.1_MC661-IN-29-10-JIO
+  MQTT_BROKER: broker.hivemq.com
+  MQTT_PORT: 1883
+  MQTT_TOPIC: /bw/mqtt/ota/864071082007457
+  OTA_SEVERITY: critical
+
+jobs:
+  build-and-flash:
+    runs-on: windows-latest          # launch.bat requires Windows
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0             # needed for git describe
+
+      # ── 2. Toolchain (gcc-arm-none-eabi 10.2.1) ────────────────────────────
+      - name: Install gcc-arm-none-eabi
+        run: |
+          choco install gcc-arm-embedded --version=10.2.1 -y
+          arm-none-eabi-gcc --version
+
+      # ── 3. Launch environment + set BUILD_TARGET ───────────────────────────
+      - name: Setup build environment
+        shell: cmd
+        run: |
+          set BUILD_TARGET=${{ env.BUILD_TARGET }}
+          call tools\launch.bat ${{ env.BUILD_TARGET }} debug gcc-arm-none-eabi-10.2.1
+
+      # ── 4. CMake configure ─────────────────────────────────────────────────
+      - name: CMake configure
+        shell: pwsh
+        run: |
+          $env:BUILD_TARGET = "${{ env.BUILD_TARGET }}"
+          $outDir = "out\${{ env.BUILD_TARGET }}_debug"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          Set-Location $outDir
+          cmake ..\.. -G Ninja
+        working-directory: ${{ github.workspace }}
+
+      # ── 5. Ninja build ─────────────────────────────────────────────────────
+      - name: Build firmware
+        shell: pwsh
+        run: |
+          Set-Location "out\${{ env.BUILD_TARGET }}_debug"
+          ninja
+        working-directory: ${{ github.workspace }}
+
+      # ── 6. Locate .img and compute SHA256 ──────────────────────────────────
+      - name: Compute SHA256 and version
+        id: meta
+        shell: pwsh
+        run: |
+          $img = Get-ChildItem -Path "out\${{ env.BUILD_TARGET }}_debug" -Filter "*.img" -Recurse |
+                 Select-Object -First 1
+          if (-not $img) { throw "No .img file found after build" }
+
+          $sha   = (Get-FileHash $img.FullName -Algorithm SHA256).Hash.ToLower()
+          $ver   = git describe --tags --always --dirty
+          $fname = $img.Name
+
+          echo "sha=$sha"     >> $env:GITHUB_OUTPUT
+          echo "version=$ver" >> $env:GITHUB_OUTPUT
+          echo "img_path=$($img.FullName)" >> $env:GITHUB_OUTPUT
+          echo "img_name=$fname"           >> $env:GITHUB_OUTPUT
+
+          Write-Host "IMG   : $($img.FullName)"
+          Write-Host "SHA256: $sha"
+          Write-Host "Version: $ver"
+
+      # ── 7. Create GitHub Release and upload .img ───────────────────────────
+      - name: Upload to GitHub Release
+        id: release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.version }}
+          name: "Firmware ${{ steps.meta.outputs.version }}"
+          files: ${{ steps.meta.outputs.img_path }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 8. Compute public download URL ─────────────────────────────────────
+      - name: Resolve firmware URL
+        id: url
+        shell: pwsh
+        run: |
+          $repo  = "${{ github.repository }}"
+          $ver   = "${{ steps.meta.outputs.version }}"
+          $fname = "${{ steps.meta.outputs.img_name }}"
+          $url   = "https://github.com/$repo/releases/download/$ver/$fname"
+          echo "firmware_url=$url" >> $env:GITHUB_OUTPUT
+          Write-Host "Firmware URL: $url"
+
+      # ── 9. Install mosquitto_pub ────────────────────────────────────────────
+      - name: Install Mosquitto MQTT client
+        run: choco install mosquitto -y
+
+      # ── 10. Build OTA JSON and publish via MQTT ────────────────────────────
+      - name: Publish OTA via MQTT
+        shell: pwsh
+        run: |
+          $payload = @{
+            version  = "${{ steps.meta.outputs.version }}"
+            url      = "${{ steps.url.outputs.firmware_url }}"
+            severity = "${{ env.OTA_SEVERITY }}"
+            sha      = "${{ steps.meta.outputs.sha }}"
+          } | ConvertTo-Json -Compress
+
+          Write-Host "OTA Payload: $payload"
+
+          # Publish with retain flag so newly-connecting devices get it immediately
+          mosquitto_pub `
+            -h ${{ env.MQTT_BROKER }} `
+            -p ${{ env.MQTT_PORT }} `
+            -t "${{ env.MQTT_TOPIC }}" `
+            -m $payload `
+            --retain `
+            -q 1
+
+          Write-Host "OTA message published to ${{ env.MQTT_TOPIC }}"
