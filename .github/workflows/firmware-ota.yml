@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: write
+
 env:
   BUILD_TARGET: 8850CM_V1.1_MC661-IN-29-10-JIO
   MQTT_BROKER: broker.hivemq.com
@@ -23,7 +26,7 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      # ── 2. Build (launch.bat + cmake + ninja all in one cmd session) ───────
+      # ── 2. Build firmware ──────────────────────────────────────────────────
       - name: Build firmware
         shell: cmd
         run: |
@@ -67,7 +70,6 @@ jobs:
 
       # ── 4. Upload .img to GitHub Release ───────────────────────────────────
       - name: Upload to GitHub Release
-        id: release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.version }}
@@ -89,28 +91,43 @@ jobs:
           echo "firmware_url=$url" >> $env:GITHUB_OUTPUT
           Write-Host "Firmware URL: $url"
 
-      # ── 6. Install Mosquitto and publish OTA JSON to HiveMQ ───────────────
-      - name: Install Mosquitto client
-        run: choco install mosquitto -y
+      # ── 6. Install paho-mqtt (Python already on runner, no choco needed) ───
+      - name: Install paho-mqtt
+        run: pip install paho-mqtt
 
+      # ── 7. Publish OTA JSON to HiveMQ ─────────────────────────────────────
       - name: Publish OTA via MQTT
         shell: pwsh
         run: |
-          $payload = @{
-            version  = "${{ steps.meta.outputs.version }}"
-            url      = "${{ steps.url.outputs.firmware_url }}"
-            severity = "${{ env.OTA_SEVERITY }}"
-            sha      = "${{ steps.meta.outputs.sha }}"
-          } | ConvertTo-Json -Compress
+          $version  = "${{ steps.meta.outputs.version }}"
+          $url      = "${{ steps.url.outputs.firmware_url }}"
+          $severity = "${{ env.OTA_SEVERITY }}"
+          $sha      = "${{ steps.meta.outputs.sha }}"
+          $broker   = "${{ env.MQTT_BROKER }}"
+          $port     = ${{ env.MQTT_PORT }}
+          $topic    = "${{ env.MQTT_TOPIC }}"
 
-          Write-Host "OTA Payload: $payload"
+          python -c @"
+import paho.mqtt.publish as publish
+import json
 
-          mosquitto_pub `
-            -h ${{ env.MQTT_BROKER }} `
-            -p ${{ env.MQTT_PORT }} `
-            -t "${{ env.MQTT_TOPIC }}" `
-            -m $payload `
-            --retain `
-            -q 1
+payload = json.dumps({
+    'version':  '$version',
+    'url':      '$url',
+    'severity': '$severity',
+    'sha':      '$sha'
+})
 
-          Write-Host "OTA published to ${{ env.MQTT_TOPIC }}"
+print(f'OTA Payload: {payload}')
+
+publish.single(
+    topic    = '$topic',
+    payload  = payload,
+    hostname = '$broker',
+    port     = $port,
+    qos      = 1,
+    retain   = True
+)
+
+print('OTA published successfully to $topic')
+"@
