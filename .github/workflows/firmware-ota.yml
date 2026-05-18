@@ -19,32 +19,25 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      # ── 1. Checkout ────────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      # ── 2. Build firmware ──────────────────────────────────────────────────
       - name: Build firmware
         shell: cmd
         run: |
           call tools\launch.bat 8850CM_V1.1_MC661-IN-29-10-JIO debug gcc-arm-none-eabi-10.2.1
           if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
-
           set BUILD_TARGET=8850CM_V1.1_MC661-IN-29-10-JIO
-
           cd out\8850CM_V1.1_MC661-IN-29-10-JIO_debug
           if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
-
           cmake ../.. -G Ninja
           if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
-
           ninja
           if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-      # ── 3. Compute SHA256 + version ────────────────────────────────────────
       - name: Compute SHA256 and version
         id: meta
         shell: pwsh
@@ -52,82 +45,72 @@ jobs:
           $img = Get-ChildItem -Path "out\${{ env.BUILD_TARGET }}_debug" -Filter "*.img" -Recurse |
                  Sort-Object LastWriteTime -Descending |
                  Select-Object -First 1
-
           if (-not $img) { throw "No .img file found after build" }
-
           $sha     = (Get-FileHash $img.FullName -Algorithm SHA256).Hash.ToLower()
           $version = git describe --tags --always --dirty
           $fname   = $img.Name
-
           echo "sha=$sha"                  >> $env:GITHUB_OUTPUT
           echo "version=$version"          >> $env:GITHUB_OUTPUT
           echo "img_path=$($img.FullName)" >> $env:GITHUB_OUTPUT
           echo "img_name=$fname"           >> $env:GITHUB_OUTPUT
-
           Write-Host "IMG    : $($img.FullName)"
           Write-Host "SHA256 : $sha"
           Write-Host "Version: $version"
 
-      # ── 4. Upload .img to GitHub Release ───────────────────────────────────
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.version }}
-          name: "Firmware ${{ steps.meta.outputs.version }}"
+          name: Firmware ${{ steps.meta.outputs.version }}
           files: ${{ steps.meta.outputs.img_path }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── 5. Resolve public download URL ─────────────────────────────────────
       - name: Resolve firmware URL
         id: url
         shell: pwsh
         run: |
-          $repo  = "${{ github.repository }}"
-          $ver   = "${{ steps.meta.outputs.version }}"
-          $fname = "${{ steps.meta.outputs.img_name }}"
-          $url   = "https://github.com/$repo/releases/download/$ver/$fname"
+          $url = "https://github.com/${{ github.repository }}/releases/download/${{ steps.meta.outputs.version }}/${{ steps.meta.outputs.img_name }}"
           echo "firmware_url=$url" >> $env:GITHUB_OUTPUT
           Write-Host "Firmware URL: $url"
 
-      # ── 6. Install paho-mqtt (Python already on runner, no choco needed) ───
       - name: Install paho-mqtt
         run: pip install paho-mqtt
 
-      # ── 7. Publish OTA JSON to HiveMQ ─────────────────────────────────────
-      - name: Publish OTA via MQTT
+      - name: Write MQTT publish script
         shell: pwsh
         run: |
-          $version  = "${{ steps.meta.outputs.version }}"
-          $url      = "${{ steps.url.outputs.firmware_url }}"
-          $severity = "${{ env.OTA_SEVERITY }}"
-          $sha      = "${{ steps.meta.outputs.sha }}"
-          $broker   = "${{ env.MQTT_BROKER }}"
-          $port     = ${{ env.MQTT_PORT }}
-          $topic    = "${{ env.MQTT_TOPIC }}"
-
-          python -c @"
+          $script = @'
 import paho.mqtt.publish as publish
-import json
-
+import json, os
 payload = json.dumps({
-    'version':  '$version',
-    'url':      '$url',
-    'severity': '$severity',
-    'sha':      '$sha'
+    "version":  os.environ["OTA_VERSION"],
+    "url":      os.environ["OTA_URL"],
+    "severity": os.environ["OTA_SEVERITY"],
+    "sha":      os.environ["OTA_SHA"]
 })
-
-print(f'OTA Payload: {payload}')
-
+print("OTA Payload:", payload)
 publish.single(
-    topic    = '$topic',
+    topic    = os.environ["MQTT_TOPIC"],
     payload  = payload,
-    hostname = '$broker',
-    port     = $port,
+    hostname = os.environ["MQTT_BROKER"],
+    port     = int(os.environ["MQTT_PORT"]),
     qos      = 1,
     retain   = True
 )
+print("OTA published successfully.")
+'@
+          $script | Out-File -FilePath publish_ota.py -Encoding utf8
 
-print('OTA published successfully to $topic')
-"@
+      - name: Publish OTA via MQTT
+        shell: pwsh
+        env:
+          OTA_VERSION: ${{ steps.meta.outputs.version }}
+          OTA_URL: ${{ steps.url.outputs.firmware_url }}
+          OTA_SEVERITY: ${{ env.OTA_SEVERITY }}
+          OTA_SHA: ${{ steps.meta.outputs.sha }}
+          MQTT_BROKER: ${{ env.MQTT_BROKER }}
+          MQTT_PORT: ${{ env.MQTT_PORT }}
+          MQTT_TOPIC: ${{ env.MQTT_TOPIC }}
+        run: python publish_ota.py
