@@ -67,13 +67,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Resolve firmware URL
+      # ── jsDelivr CDN URL — free, global, no setup needed ──────────────────
+      - name: Resolve jsDelivr CDN URL
         id: url
         shell: pwsh
         run: |
-          $url = "https://github.com/${{ github.repository }}/releases/download/${{ steps.meta.outputs.version }}/${{ steps.meta.outputs.img_name }}"
+          $repo  = "${{ github.repository }}"
+          $ver   = "${{ steps.meta.outputs.version }}"
+          $fname = "${{ steps.meta.outputs.img_name }}"
+          $url   = "https://cdn.jsdelivr.net/gh/$repo@$ver/out/${{ env.BUILD_TARGET }}_debug/$fname"
           echo "firmware_url=$url" >> $env:GITHUB_OUTPUT
-          Write-Host "Firmware URL: $url"
+          Write-Host "jsDelivr URL: $url"
 
       - name: Install paho-mqtt
         run: pip install paho-mqtt
