@@ -25,6 +25,8 @@ pipeline {
         stage('Build Firmware') {
             steps {
                 bat """
+                    set PATH=C:\\ninja;C:\\Program Files (x86)\\Arm\\GNU Toolchain mingw-w64-i686-arm-none-eabi\\bin;%PATH%
+
                     call tools\\launch.bat %BUILD_TARGET% debug gcc-arm-none-eabi-10.2.1
                     if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
@@ -46,7 +48,6 @@ pipeline {
         stage('Compute SHA256 and Version') {
             steps {
                 script {
-                    // Find the .img file
                     def img = bat(
                         script: "dir /s /b %OUT_DIR%\\*.img",
                         returnStdout: true
@@ -54,7 +55,6 @@ pipeline {
 
                     echo "Found IMG: ${img}"
 
-                    // Compute SHA256
                     def sha = bat(
                         script: "certutil -hashfile \"${img}\" SHA256 | findstr /v hash | findstr /v CertUtil",
                         returnStdout: true
@@ -62,7 +62,6 @@ pipeline {
 
                     echo "SHA256: ${sha}"
 
-                    // Get version from git tag
                     def version = bat(
                         script: "git describe --tags --always --dirty",
                         returnStdout: true
@@ -70,16 +69,12 @@ pipeline {
 
                     echo "Version: ${version}"
 
-                    // Get just the filename
                     def fname = img.tokenize('\\').last()
 
-                    // Store for later stages
-                    env.IMG_PATH    = img
-                    env.IMG_NAME    = fname
-                    env.OTA_SHA     = sha
-                    env.OTA_VERSION = version
-
-                    // Permanent Jenkins artifact URL via ngrok
+                    env.IMG_PATH     = img
+                    env.IMG_NAME     = fname
+                    env.OTA_SHA      = sha
+                    env.OTA_VERSION  = version
                     env.FIRMWARE_URL = "https://${env.NGROK_DOMAIN}/job/${env.JENKINS_JOB}/lastSuccessfulBuild/artifact/${env.OUT_DIR}/${fname}"
 
                     echo "Firmware URL: ${env.FIRMWARE_URL}"
@@ -100,10 +95,8 @@ pipeline {
         stage('Publish OTA via MQTT') {
             steps {
                 script {
-                    // Install paho-mqtt if not already installed
                     bat "pip install paho-mqtt --quiet"
 
-                    // Write the publish script dynamically
                     writeFile file: 'publish_ota.py', text: """
 import paho.mqtt.publish as publish
 import json, os
@@ -134,7 +127,6 @@ publish.single(
 
 print("OTA published successfully.")
 """
-                    // Run the publish script
                     withEnv([
                         "OTA_VERSION=${env.OTA_VERSION}",
                         "FIRMWARE_URL=${env.FIRMWARE_URL}",
@@ -151,7 +143,6 @@ print("OTA published successfully.")
         }
     }
 
-    // ── Post build ───────────────────────────────────────────────────────────
     post {
         success {
             echo "Pipeline completed. Firmware URL: ${env.FIRMWARE_URL}"
