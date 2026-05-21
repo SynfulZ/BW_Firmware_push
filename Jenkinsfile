@@ -144,12 +144,48 @@ pipeline {
         }
 
         // ── 5. Publish OTA via MQTT ───────────────────────────────────────────
-        stage('Publish OTA via MQTT') {
-            steps {
-                script {
-                    bat "\"%PYTHON_EXE%\" -m pip install paho-mqtt --quiet"
+     stage('Publish OTA via MQTT') {
+    steps {
+        script {
+            // Start cloudflared tunnel
+            bat """
+                start /B "%CLOUDFLARED_EXE%" tunnel --url http://localhost:8080 --logfile cloudflared.log
+                timeout /t 5
+            """
 
-                    writeFile file: 'publish_ota.py', text: """
+            // Capture tunnel URL
+            def tunnelUrl = ""
+            def retries = 10
+
+            for (int i = 0; i < retries; i++) {
+                sleep(3)
+                def tunnelLog = bat(
+                    script: "type cloudflared.log",
+                    returnStdout: true
+                ).trim()
+
+                def match = tunnelLog =~ /https:\/\/[a-z0-9\-]+\.trycloudflare\.com/
+                if (match) {
+                    tunnelUrl = match[0]
+                    echo "✅ Tunnel URL: ${tunnelUrl}"
+                    break
+                }
+                echo "⏳ Waiting for tunnel... attempt ${i + 1}/${retries}"
+            }
+
+            if (!tunnelUrl) {
+                error "❌ Failed to get tunnel URL from cloudflared"
+            }
+
+            // Set firmware URL
+            env.FIRMWARE_URL = "${tunnelUrl}/job/${env.JENKINS_JOB}/lastSuccessfulBuild/artifact/${env.OUT_DIR}/${env.IMG_NAME}"
+            echo "Firmware URL: ${env.FIRMWARE_URL}"
+
+            // Install paho-mqtt
+            bat "\"%PYTHON_EXE%\" -m pip install paho-mqtt --quiet"
+
+            // Write and run publish script
+            writeFile file: 'publish_ota.py', text: """
 import paho.mqtt.publish as publish
 import json, os
 
@@ -179,21 +215,26 @@ publish.single(
 
 print("OTA published successfully.")
 """
-                    withEnv([
-                        "OTA_VERSION=${env.OTA_VERSION}",
-                        "FIRMWARE_URL=${env.FIRMWARE_URL}",
-                        "OTA_SEVERITY=${env.OTA_SEVERITY}",
-                        "OTA_SHA=${env.OTA_SHA}",
-                        "MQTT_BROKER=${env.MQTT_BROKER}",
-                        "MQTT_PORT=${env.MQTT_PORT}",
-                        "MQTT_TOPIC=${env.MQTT_TOPIC}"
-                    ]) {
-                        bat "\"%PYTHON_EXE%\" publish_ota.py"
-                    }
-                }
+            withEnv([
+                "OTA_VERSION=${env.OTA_VERSION}",
+                "FIRMWARE_URL=${env.FIRMWARE_URL}",
+                "OTA_SEVERITY=${env.OTA_SEVERITY}",
+                "OTA_SHA=${env.OTA_SHA}",
+                "MQTT_BROKER=${env.MQTT_BROKER}",
+                "MQTT_PORT=${env.MQTT_PORT}",
+                "MQTT_TOPIC=${env.MQTT_TOPIC}"
+            ]) {
+                bat "\"%PYTHON_EXE%\" publish_ota.py"
             }
+
+            // Keep tunnel alive for 30 minutes
+            echo "⏳ Tunnel open for 30 minutes — waiting for soundbox to download firmware..."
+            bat "timeout /t 1800 /nobreak"
+            bat "taskkill /F /IM cloudflared.exe"
+            echo "✅ Tunnel closed."
         }
     }
+}
 
     post {
         success {
