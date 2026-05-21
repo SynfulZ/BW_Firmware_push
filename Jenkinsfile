@@ -165,30 +165,47 @@ pipeline {
             steps {
                 script {
                     // Start cloudflared tunnel
-                    bat """
-                        start /B "%CLOUDFLARED_EXE%" tunnel --url http://localhost:8080 --logfile cloudflared.log
-                        timeout /t 5
-                    """
+                    // Start cloudflared tunnel with absolute log path
+def logFile = "${env.WORKSPACE}\\cloudflared.log"
 
-                    // Capture tunnel URL with retries
-                    def tunnelUrl = ""
-                    def retries = 10
+bat """
+    if exist "${logFile}" del "${logFile}"
+    start /B "%CLOUDFLARED_EXE%" tunnel --url http://localhost:8080 --logfile "${logFile}"
+    timeout /t 8
+"""
 
-                    for (int i = 0; i < retries; i++) {
-                        sleep(3)
-                        def tunnelLog = bat(
-                            script: "type cloudflared.log",
-                            returnStdout: true
-                        ).trim()
+// Capture tunnel URL with retries
+def tunnelUrl = ""
+def retries = 15
 
-                        def match = tunnelLog =~ /https:\/\/[a-z0-9\-]+\.trycloudflare\.com/
-                        if (match) {
-                            tunnelUrl = match[0]
-                            echo "✅ Tunnel URL: ${tunnelUrl}"
-                            break
-                        }
-                        echo "⏳ Waiting for tunnel... attempt ${i + 1}/${retries}"
-                    }
+for (int i = 0; i < retries; i++) {
+    sleep(3)
+    
+    def logExists = bat(
+        script: "if exist \"${logFile}\" (echo EXISTS) else (echo MISSING)",
+        returnStdout: true
+    ).trim()
+    
+    if (!logExists.contains("EXISTS")) {
+        echo "⏳ Log file not created yet... attempt ${i + 1}/${retries}"
+        continue
+    }
+
+    def tunnelLog = bat(
+        script: "type \"${logFile}\"",
+        returnStdout: true
+    ).trim()
+
+    echo "Log contents: ${tunnelLog}"  // temporary debug line
+
+    def match = tunnelLog =~ /https:\/\/[a-z0-9\-]+\.trycloudflare\.com/
+    if (match) {
+        tunnelUrl = match[0]
+        echo "✅ Tunnel URL: ${tunnelUrl}"
+        break
+    }
+    echo "⏳ Waiting for tunnel URL... attempt ${i + 1}/${retries}"
+}
 
                     if (!tunnelUrl) {
                         error "❌ Failed to get tunnel URL from cloudflared"
