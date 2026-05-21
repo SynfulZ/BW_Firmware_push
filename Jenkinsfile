@@ -24,6 +24,7 @@ pipeline {
         // ── 2. Build ─────────────────────────────────────────────────────────
         stage('Build Firmware') {
             steps {
+                bat 'where arm-none-eabi-gcc'
                 bat """
                     set PATH=C:\\ninja;C:\\Program Files (x86)\\Arm\\GNU Toolchain mingw-w64-i686-arm-none-eabi\\bin;%PATH%
 
