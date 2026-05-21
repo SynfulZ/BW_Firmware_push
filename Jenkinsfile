@@ -3,22 +3,25 @@ pipeline {
 
     environment {
         // ── Build Target ─────────────────────────────────────────────────────
-        BUILD_TARGET   = "8850CM_V1.1_MC661-IN-29-10-JIO"
-        OUT_DIR        = "out\\8850CM_V1.1_MC661-IN-29-10-JIO_debug"
+        BUILD_TARGET        = "8850CM_V1.1_MC661-IN-29-10-JIO"
+        OUT_DIR             = "out\\8850CM_V1.1_MC661-IN-29-10-JIO_debug"
 
         // ── MQTT Config ───────────────────────────────────────────────────────
-        MQTT_BROKER    = "broker.hivemq.com"
-        MQTT_PORT      = "1883"
-        MQTT_TOPIC     = "/bw/mqtt/ota/864071082007457"
-        OTA_SEVERITY   = "critical"
-        JENKINS_JOB    = "BW_Build_Pipeline"
-        NGROK_DOMAIN   = "gleeful-immodest-buckskin.ngrok-free.app"
+        MQTT_BROKER         = "broker.hivemq.com"
+        MQTT_PORT           = "1883"
+        MQTT_TOPIC          = "/bw/mqtt/ota/864071082007457"
+        OTA_SEVERITY        = "critical"
+        JENKINS_JOB         = "BW_Build_Pipeline"
 
         // ── Tool Paths ────────────────────────────────────────────────────────
-        PYTHON_EXE     = "C:\\Users\\Swastik Sharma\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe"
-        GIT_EXE        = "C:\\Users\\Swastik Sharma\\AppData\\Local\\Programs\\Git\\cmd\\git.exe"
-        NINJA_EXE      = "C:\\ninja\\ninja.exe"
-        TOOLCHAIN      = "gcc-arm-none-eabi-10.2.1"
+        PYTHON_EXE          = "C:\\Users\\Swastik Sharma\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe"
+        GIT_EXE             = "C:\\Users\\Swastik Sharma\\AppData\\Local\\Programs\\Git\\cmd\\git.exe"
+        NINJA_EXE           = "C:\\ninja\\ninja.exe"
+        CLOUDFLARED_EXE     = "C:\\cloudflared\\cloudflared.exe"
+        TOOLCHAIN           = "gcc-arm-none-eabi-10.2.1"
+
+        // ── Tunnel Config ─────────────────────────────────────────────────────
+        TUNNEL_WAIT_SECONDS = "1800"   // 30 minutes
     }
 
     stages {
@@ -27,10 +30,14 @@ pipeline {
         stage('Validate Tools') {
             steps {
                 script {
+                    // Fix long path support for git
+                    bat "\"%GIT_EXE%\" config --system core.longpaths true"
+
                     def tools = [
-                        "Python"    : env.PYTHON_EXE,
-                        "Git"       : env.GIT_EXE,
-                        "Ninja"     : env.NINJA_EXE,
+                        "Python"      : env.PYTHON_EXE,
+                        "Git"         : env.GIT_EXE,
+                        "Ninja"       : env.NINJA_EXE,
+                        "Cloudflared" : env.CLOUDFLARED_EXE,
                     ]
 
                     def missing = []
@@ -63,8 +70,10 @@ pipeline {
                     }
 
                     if (missing) {
-                        error "Missing required tools: ${missing.join(', ')}. Update paths in the environment block at the top of the Jenkinsfile."
+                        error "❌ Missing required tools: ${missing.join(', ')}. Update paths in the environment block."
                     }
+
+                    echo "✅ All tools validated."
                 }
             }
         }
@@ -127,9 +136,8 @@ pipeline {
                     env.IMG_NAME     = fname
                     env.OTA_SHA      = sha
                     env.OTA_VERSION  = version
-                    env.FIRMWARE_URL = "http://localhost:8080/job/${env.JENKINS_JOB}/lastSuccessfulBuild/artifact/${env.OUT_DIR}/${fname}"
 
-                    echo "Firmware URL: ${env.FIRMWARE_URL}"
+                    echo "Version: ${env.OTA_VERSION}"
                 }
             }
         }
@@ -144,48 +152,48 @@ pipeline {
         }
 
         // ── 5. Publish OTA via MQTT ───────────────────────────────────────────
-     stage('Publish OTA via MQTT') {
-    steps {
-        script {
-            // Start cloudflared tunnel
-            bat """
-                start /B "%CLOUDFLARED_EXE%" tunnel --url http://localhost:8080 --logfile cloudflared.log
-                timeout /t 5
-            """
+        stage('Publish OTA via MQTT') {
+            steps {
+                script {
+                    // Start cloudflared tunnel
+                    bat """
+                        start /B "%CLOUDFLARED_EXE%" tunnel --url http://localhost:8080 --logfile cloudflared.log
+                        timeout /t 5
+                    """
 
-            // Capture tunnel URL
-            def tunnelUrl = ""
-            def retries = 10
+                    // Capture tunnel URL with retries
+                    def tunnelUrl = ""
+                    def retries = 10
 
-            for (int i = 0; i < retries; i++) {
-                sleep(3)
-                def tunnelLog = bat(
-                    script: "type cloudflared.log",
-                    returnStdout: true
-                ).trim()
+                    for (int i = 0; i < retries; i++) {
+                        sleep(3)
+                        def tunnelLog = bat(
+                            script: "type cloudflared.log",
+                            returnStdout: true
+                        ).trim()
 
-                def match = tunnelLog =~ /https:\/\/[a-z0-9\-]+\.trycloudflare\.com/
-                if (match) {
-                    tunnelUrl = match[0]
-                    echo "✅ Tunnel URL: ${tunnelUrl}"
-                    break
-                }
-                echo "⏳ Waiting for tunnel... attempt ${i + 1}/${retries}"
-            }
+                        def match = tunnelLog =~ /https:\/\/[a-z0-9\-]+\.trycloudflare\.com/
+                        if (match) {
+                            tunnelUrl = match[0]
+                            echo "✅ Tunnel URL: ${tunnelUrl}"
+                            break
+                        }
+                        echo "⏳ Waiting for tunnel... attempt ${i + 1}/${retries}"
+                    }
 
-            if (!tunnelUrl) {
-                error "❌ Failed to get tunnel URL from cloudflared"
-            }
+                    if (!tunnelUrl) {
+                        error "❌ Failed to get tunnel URL from cloudflared"
+                    }
 
-            // Set firmware URL
-            env.FIRMWARE_URL = "${tunnelUrl}/job/${env.JENKINS_JOB}/lastSuccessfulBuild/artifact/${env.OUT_DIR}/${env.IMG_NAME}"
-            echo "Firmware URL: ${env.FIRMWARE_URL}"
+                    // Set firmware URL using tunnel
+                    env.FIRMWARE_URL = "${tunnelUrl}/job/${env.JENKINS_JOB}/lastSuccessfulBuild/artifact/${env.OUT_DIR}/${env.IMG_NAME}"
+                    echo "Firmware URL: ${env.FIRMWARE_URL}"
 
-            // Install paho-mqtt
-            bat "\"%PYTHON_EXE%\" -m pip install paho-mqtt --quiet"
+                    // Install paho-mqtt
+                    bat "\"%PYTHON_EXE%\" -m pip install paho-mqtt --quiet"
 
-            // Write and run publish script
-            writeFile file: 'publish_ota.py', text: """
+                    // Write publish script
+                    writeFile file: 'publish_ota.py', text: """
 import paho.mqtt.publish as publish
 import json, os
 
@@ -215,33 +223,39 @@ publish.single(
 
 print("OTA published successfully.")
 """
-            withEnv([
-                "OTA_VERSION=${env.OTA_VERSION}",
-                "FIRMWARE_URL=${env.FIRMWARE_URL}",
-                "OTA_SEVERITY=${env.OTA_SEVERITY}",
-                "OTA_SHA=${env.OTA_SHA}",
-                "MQTT_BROKER=${env.MQTT_BROKER}",
-                "MQTT_PORT=${env.MQTT_PORT}",
-                "MQTT_TOPIC=${env.MQTT_TOPIC}"
-            ]) {
-                bat "\"%PYTHON_EXE%\" publish_ota.py"
-            }
+                    // Publish OTA
+                    withEnv([
+                        "OTA_VERSION=${env.OTA_VERSION}",
+                        "FIRMWARE_URL=${env.FIRMWARE_URL}",
+                        "OTA_SEVERITY=${env.OTA_SEVERITY}",
+                        "OTA_SHA=${env.OTA_SHA}",
+                        "MQTT_BROKER=${env.MQTT_BROKER}",
+                        "MQTT_PORT=${env.MQTT_PORT}",
+                        "MQTT_TOPIC=${env.MQTT_TOPIC}"
+                    ]) {
+                        bat "\"%PYTHON_EXE%\" publish_ota.py"
+                    }
 
-            // Keep tunnel alive for 30 minutes
-            echo "⏳ Tunnel open for 30 minutes — waiting for soundbox to download firmware..."
-            bat "timeout /t 1800 /nobreak"
-            bat "taskkill /F /IM cloudflared.exe"
-            echo "✅ Tunnel closed."
+                    // Keep tunnel alive for soundbox to download
+                    echo "⏳ Tunnel open for ${env.TUNNEL_WAIT_SECONDS}s — waiting for soundbox to download firmware..."
+                    bat "timeout /t %TUNNEL_WAIT_SECONDS% /nobreak"
+                    bat "taskkill /F /IM cloudflared.exe"
+                    echo "✅ Tunnel closed."
+                }
+            }
         }
     }
-}
 
     post {
+        always {
+            // Safety net — kill tunnel even if pipeline fails
+            bat "taskkill /F /IM cloudflared.exe || exit /b 0"
+        }
         success {
-            echo "Pipeline completed. Firmware URL: ${env.FIRMWARE_URL}"
+            echo "✅ Pipeline completed. Firmware URL: ${env.FIRMWARE_URL}"
         }
         failure {
-            echo "Pipeline failed. Check logs above for errors."
+            echo "❌ Pipeline failed. Check logs above for errors."
         }
     }
 }
