@@ -91,16 +91,14 @@ stage('Compute SHA256 and Version') {
         }
 
         // ── 5. Publish OTA JSON to HiveMQ ────────────────────────────────────
-        stage('Publish OTA via MQTT') {
-            steps {
-            bat 'where python || echo Python not found'
-            bat 'where pip || echo pip not found'
+  stage('Publish OTA via MQTT') {
+    steps {
+        script {
+            def python = "\"C:\\Users\\Swastik Sharma\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe\""
+            
+            bat "${python} -m pip install paho-mqtt --quiet"
 
-                
-                script {
-                    bat "pip install paho-mqtt --quiet"
-
-                    writeFile file: 'publish_ota.py', text: """
+            writeFile file: 'publish_ota.py', text: """
 import paho.mqtt.publish as publish
 import json, os
 
@@ -130,22 +128,20 @@ publish.single(
 
 print("OTA published successfully.")
 """
-                    withEnv([
-                        "OTA_VERSION=${env.OTA_VERSION}",
-                        "FIRMWARE_URL=${env.FIRMWARE_URL}",
-                        "OTA_SEVERITY=${env.OTA_SEVERITY}",
-                        "OTA_SHA=${env.OTA_SHA}",
-                        "MQTT_BROKER=${env.MQTT_BROKER}",
-                        "MQTT_PORT=${env.MQTT_PORT}",
-                        "MQTT_TOPIC=${env.MQTT_TOPIC}"
-                    ]) {
-                        bat "python publish_ota.py"
-                    }
-                }
+            withEnv([
+                "OTA_VERSION=${env.OTA_VERSION}",
+                "FIRMWARE_URL=${env.FIRMWARE_URL}",
+                "OTA_SEVERITY=${env.OTA_SEVERITY}",
+                "OTA_SHA=${env.OTA_SHA}",
+                "MQTT_BROKER=${env.MQTT_BROKER}",
+                "MQTT_PORT=${env.MQTT_PORT}",
+                "MQTT_TOPIC=${env.MQTT_TOPIC}"
+            ]) {
+                bat "${python} publish_ota.py"
             }
         }
     }
-
+}
     post {
         success {
             echo "Pipeline completed. Firmware URL: ${env.FIRMWARE_URL}"
