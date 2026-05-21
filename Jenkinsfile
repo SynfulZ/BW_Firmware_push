@@ -123,12 +123,11 @@ pipeline {
                     def sha = certutilOut[1].trim().toLowerCase()
                     echo "SHA256: ${sha}"
 
-                    def version = bat(
-                        script: "\"%GIT_EXE%\" describe --tags --always --dirty",
+                   def version = bat(
+                        script: "echo %DATE:~-4%%DATE:~3,2%%DATE:~0,2%-&\"%GIT_EXE%\" rev-parse --short HEAD",
                         returnStdout: true
-                    ).trim().readLines().last()
-
-                    echo "Version: ${version}"
+                            ).trim().readLines().last()
+                        echo "Version: ${version}"
 
                     def fname = img.tokenize('\\').last()
 
