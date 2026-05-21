@@ -42,7 +42,7 @@ pipeline {
 }
 
         // ── 3. Compute SHA256 + version ──────────────────────────────────────
-   stage('Compute SHA256 and Version') {
+stage('Compute SHA256 and Version') {
     steps {
         script {
             def img = bat(
@@ -52,10 +52,13 @@ pipeline {
 
             echo "Found IMG: ${img}"
 
-            def sha = bat(
+            def certutilOut = bat(
                 script: "certutil -hashfile \"${img}\" SHA256",
                 returnStdout: true
-            ).trim().readLines()[1].trim().toLowerCase()
+            ).trim().readLines()
+
+            // certutil output is: line0=header, line1=hash, line2=footer
+            def sha = certutilOut[1].trim().toLowerCase()
 
             echo "SHA256: ${sha}"
 
@@ -72,13 +75,13 @@ pipeline {
             env.IMG_NAME     = fname
             env.OTA_SHA      = sha
             env.OTA_VERSION  = version
-            env.FIRMWARE_URL = "https://${env.NGROK_DOMAIN}/job/${env.JENKINS_JOB}/lastSuccessfulBuild/artifact/${env.OUT_DIR}/${fname}"
+            // Use Jenkins itself to serve the artifact — no ngrok needed
+            env.FIRMWARE_URL = "http://localhost:8080/job/${env.JENKINS_JOB}/lastSuccessfulBuild/artifact/${env.OUT_DIR}/${fname}"
 
             echo "Firmware URL: ${env.FIRMWARE_URL}"
         }
     }
-}
-        // ── 4. Archive .img as Jenkins artifact ──────────────────────────────
+}        // ── 4. Archive .img as Jenkins artifact ──────────────────────────────
         stage('Archive Firmware') {
             steps {
                 archiveArtifacts artifacts: "out\\8850CM_V1.1_MC661-IN-29-10-JIO_debug\\*.img",
@@ -90,6 +93,10 @@ pipeline {
         // ── 5. Publish OTA JSON to HiveMQ ────────────────────────────────────
         stage('Publish OTA via MQTT') {
             steps {
+            bat 'where python || echo Python not found'
+            bat 'where pip || echo pip not found'
+
+                
                 script {
                     bat "pip install paho-mqtt --quiet"
 
