@@ -171,21 +171,23 @@ pipeline {
                 script {
                     def logFile = "${env.WORKSPACE}\\cloudflared.log"
 
-                    // Start cloudflared tunnel
-                    bat """
-                        if exist "${logFile}" del "${logFile}"
-                        start "cloudflared" /B "" "%CLOUDFLARED_EXE%" tunnel --url http://localhost:8080 --logfile "${logFile}"
-                    """
+// Delete old log
+bat "if exist \"${logFile}\" del \"${logFile}\""
 
-                    // Wait for tunnel to initialize
-                    sleep(15)
+// Launch cloudflared fully detached via PowerShell
+bat "powershell -Command \"Start-Process -FilePath '$env:CLOUDFLARED_EXE' -ArgumentList 'tunnel','--url','http://localhost:8080','--logfile','${logFile}' -WindowStyle Hidden\""
 
-                    // Print raw log for debugging
-                    def rawLog = bat(script: "type \"${logFile}\"", returnStdout: true).trim()
-                    echo "=== RAW CLOUDFLARED LOG ==="
-                    echo rawLog
-                    echo "==========================="
+// Give it time to start
+sleep(15)
 
+// Check log
+def rawLog = bat(
+    script: "if exist \"${logFile}\" (type \"${logFile}\") else (echo LOG_NOT_FOUND)",
+    returnStdout: true
+).trim()
+echo "=== CLOUDFLARED LOG ==="
+echo rawLog
+echo "======================="
                     // Capture tunnel URL with retries
                     def tunnelUrl = ""
                     def retries = 15
