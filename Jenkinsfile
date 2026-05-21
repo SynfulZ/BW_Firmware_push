@@ -23,27 +23,23 @@ pipeline {
 
         // ── 2. Build ─────────────────────────────────────────────────────────
         stage('Build Firmware') {
-            steps {
-                bat 'where arm-none-eabi-gcc'
-                bat """
-                    
+    steps {
+        bat 'where arm-none-eabi-gcc'
+        bat """
+            call tools\\launch.bat %BUILD_TARGET% debug gcc-arm-none-eabi-10.2.1
+            if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-                    call tools\\launch.bat %BUILD_TARGET% debug gcc-arm-none-eabi-10.2.1
-                    if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+            cd %OUT_DIR%
+            if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-                    set BUILD_TARGET=%BUILD_TARGET%
+            cmake ../.. -G Ninja -DCMAKE_MAKE_PROGRAM=C:\\ninja\\ninja.exe
+            if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-                    cd %OUT_DIR%
-                    if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
-
-                    cmake ../.. -G Ninja
-                    if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
-
-                    ninja
-                    if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
-                """
-            }
-        }
+            C:\\ninja\\ninja.exe
+            if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+        """
+    }
+}
 
         // ── 3. Compute SHA256 + version ──────────────────────────────────────
         stage('Compute SHA256 and Version') {
