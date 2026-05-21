@@ -21,7 +21,8 @@ pipeline {
         TOOLCHAIN           = "gcc-arm-none-eabi-10.2.1"
 
         // ── Tunnel Config ─────────────────────────────────────────────────────
-        TUNNEL_WAIT_SECONDS = "1800"   // 30 minutes
+        TUNNEL_WAIT_SECONDS = "1800"  // 30 minutes
+        ENABLE_OTA          = "true"  // set to false to skip MQTT stage
     }
 
     stages {
@@ -79,21 +80,21 @@ pipeline {
         }
 
         // ── 1. Checkout ───────────────────────────────────────────────────────
-      stage('Checkout') {
-    steps {
-        checkout([
-            $class: 'GitSCM',
-            branches: [[name: '*/main']],
-            extensions: [
-                [$class: 'CloneOption', noTags: true, shallow: true, depth: 1]
-            ],
-            userRemoteConfigs: [[
-                credentialsId: 'github_creds',
-                url: 'https://github.com/SynfulZ/BW_Firmware_push.git'
-            ]]
-        ])
-    }
-}
+        stage('Checkout') {
+            steps {
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: '*/main']],
+                    extensions: [
+                        [$class: 'CloneOption', noTags: true, shallow: true, depth: 1]
+                    ],
+                    userRemoteConfigs: [[
+                        credentialsId: 'github_creds',
+                        url: 'https://github.com/SynfulZ/BW_Firmware_push.git'
+                    ]]
+                ])
+            }
+        }
 
         // ── 2. Build ──────────────────────────────────────────────────────────
         stage('Build Firmware') {
@@ -133,11 +134,12 @@ pipeline {
                     def sha = certutilOut[1].trim().toLowerCase()
                     echo "SHA256: ${sha}"
 
-                   def version = bat(
-                        script: "echo %DATE:~-4%%DATE:~3,2%%DATE:~0,2%-&\"%GIT_EXE%\" rev-parse --short HEAD",
+                    def version = bat(
+                        script: "\"%GIT_EXE%\" rev-parse --short HEAD",
                         returnStdout: true
-                            ).trim().readLines().last()
-                        echo "Version: ${version}"
+                    ).trim().readLines().last()
+
+                    echo "Version: ${version}"
 
                     def fname = img.tokenize('\\').last()
 
@@ -162,62 +164,58 @@ pipeline {
 
         // ── 5. Publish OTA via MQTT ───────────────────────────────────────────
         stage('Publish OTA via MQTT') {
+            when {
+                environment name: 'ENABLE_OTA', value: 'true'
+            }
             steps {
                 script {
+                    def logFile = "${env.WORKSPACE}\\cloudflared.log"
+
                     // Start cloudflared tunnel
-                    // Start cloudflared tunnel with absolute log path
-def logFile = "${env.WORKSPACE}\\cloudflared.log"
+                    bat """
+                        if exist "${logFile}" del "${logFile}"
+                        start "cloudflared" /B "" "%CLOUDFLARED_EXE%" tunnel --url http://localhost:8080 --logfile "${logFile}"
+                    """
 
-bat """
-    if exist "${logFile}" del "${logFile}"
-    start "cloudflared" /B "" "%CLOUDFLARED_EXE%" tunnel --url http://localhost:8080 --logfile "${logFile}"
-    timeout /t 15
-"""
+                    // Wait for tunnel to initialize
+                    sleep(15)
 
-// Print raw log for debugging
-def rawLog = bat(script: "type \"${logFile}\"", returnStdout: true).trim()
-echo "=== RAW CLOUDFLARED LOG ==="
-echo rawLog
-echo "==========================="
-// Print raw log for debugging
-def rawLog = bat(script: "type \"${logFile}\"", returnStdout: true).trim()
-echo "=== RAW CLOUDFLARED LOG ==="
-echo rawLog
-echo "==========================="
-"""
+                    // Print raw log for debugging
+                    def rawLog = bat(script: "type \"${logFile}\"", returnStdout: true).trim()
+                    echo "=== RAW CLOUDFLARED LOG ==="
+                    echo rawLog
+                    echo "==========================="
 
-// Capture tunnel URL with retries
-def tunnelUrl = ""
-def retries = 15
+                    // Capture tunnel URL with retries
+                    def tunnelUrl = ""
+                    def retries = 15
 
-for (int i = 0; i < retries; i++) {
-    sleep(3)
-    
-    def logExists = bat(
-        script: "if exist \"${logFile}\" (echo EXISTS) else (echo MISSING)",
-        returnStdout: true
-    ).trim()
-    
-    if (!logExists.contains("EXISTS")) {
-        echo "⏳ Log file not created yet... attempt ${i + 1}/${retries}"
-        continue
-    }
+                    for (int i = 0; i < retries; i++) {
+                        sleep(3)
 
-    def tunnelLog = bat(
-        script: "type \"${logFile}\"",
-        returnStdout: true
-    ).trim()
+                        def logExists = bat(
+                            script: "if exist \"${logFile}\" (echo EXISTS) else (echo MISSING)",
+                            returnStdout: true
+                        ).trim()
 
-    echo "Log contents: ${tunnelLog}"  // temporary debug line
+                        if (!logExists.contains("EXISTS")) {
+                            echo "⏳ Log not created yet... attempt ${i + 1}/${retries}"
+                            continue
+                        }
 
-    def match = tunnelLog =~ /https:\/\/[a-z0-9\-]+\.trycloudflare\.com/
-    if (match) {
-        tunnelUrl = match[0]
-        echo "✅ Tunnel URL: ${tunnelUrl}"
-        break
-    }
-    echo "⏳ Waiting for tunnel URL... attempt ${i + 1}/${retries}"
-}
+                        def tunnelLog = bat(
+                            script: "type \"${logFile}\"",
+                            returnStdout: true
+                        ).trim()
+
+                        def match = tunnelLog =~ /https:\/\/[a-z0-9\-]+\.trycloudflare\.com/
+                        if (match) {
+                            tunnelUrl = match[0]
+                            echo "✅ Tunnel URL: ${tunnelUrl}"
+                            break
+                        }
+                        echo "⏳ Waiting for tunnel URL... attempt ${i + 1}/${retries}"
+                    }
 
                     if (!tunnelUrl) {
                         error "❌ Failed to get tunnel URL from cloudflared"
@@ -274,10 +272,21 @@ print("OTA published successfully.")
                         bat "\"%PYTHON_EXE%\" publish_ota.py"
                     }
 
-                    // Keep tunnel alive for soundbox to download
-                    echo "⏳ Tunnel open for ${env.TUNNEL_WAIT_SECONDS}s — waiting for soundbox to download firmware..."
-                    bat "timeout /t %TUNNEL_WAIT_SECONDS% /nobreak"
-                    bat "taskkill /F /IM cloudflared.exe"
+                    // Keep tunnel alive using Groovy sleep (responds to Jenkins abort)
+                    def waitSeconds = env.TUNNEL_WAIT_SECONDS.toInteger()
+                    def elapsed = 0
+                    def interval = 30
+
+                    echo "⏳ Tunnel open for ${waitSeconds}s — waiting for soundbox to download firmware..."
+
+                    while (elapsed < waitSeconds) {
+                        sleep(interval)
+                        elapsed += interval
+                        echo "⏳ Tunnel alive: ${elapsed}/${waitSeconds}s"
+                    }
+
+                    // Kill tunnel
+                    bat "taskkill /F /IM cloudflared.exe || exit /b 0"
                     echo "✅ Tunnel closed."
                 }
             }
@@ -286,7 +295,7 @@ print("OTA published successfully.")
 
     post {
         always {
-            // Safety net — kill tunnel even if pipeline fails
+            // Kill tunnel even if pipeline fails or is aborted
             bat "taskkill /F /IM cloudflared.exe || exit /b 0"
         }
         success {
