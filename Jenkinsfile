@@ -170,8 +170,20 @@ def logFile = "${env.WORKSPACE}\\cloudflared.log"
 
 bat """
     if exist "${logFile}" del "${logFile}"
-    start /B "%CLOUDFLARED_EXE%" tunnel --url http://localhost:8080 --logfile "${logFile}"
-    timeout /t 8
+    start "cloudflared" /B "" "%CLOUDFLARED_EXE%" tunnel --url http://localhost:8080 --logfile "${logFile}"
+    timeout /t 15
+"""
+
+// Print raw log for debugging
+def rawLog = bat(script: "type \"${logFile}\"", returnStdout: true).trim()
+echo "=== RAW CLOUDFLARED LOG ==="
+echo rawLog
+echo "==========================="
+// Print raw log for debugging
+def rawLog = bat(script: "type \"${logFile}\"", returnStdout: true).trim()
+echo "=== RAW CLOUDFLARED LOG ==="
+echo rawLog
+echo "==========================="
 """
 
 // Capture tunnel URL with retries
