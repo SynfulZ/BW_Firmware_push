@@ -79,11 +79,21 @@ pipeline {
         }
 
         // ── 1. Checkout ───────────────────────────────────────────────────────
-        stage('Checkout') {
-            steps {
-                checkout scm
-            }
-        }
+      stage('Checkout') {
+    steps {
+        checkout([
+            $class: 'GitSCM',
+            branches: [[name: '*/main']],
+            extensions: [
+                [$class: 'CloneOption', noTags: true, shallow: true, depth: 1]
+            ],
+            userRemoteConfigs: [[
+                credentialsId: 'github_creds',
+                url: 'https://github.com/SynfulZ/BW_Firmware_push.git'
+            ]]
+        ])
+    }
+}
 
         // ── 2. Build ──────────────────────────────────────────────────────────
         stage('Build Firmware') {
