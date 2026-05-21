@@ -26,7 +26,7 @@ pipeline {
             steps {
                 bat 'where arm-none-eabi-gcc'
                 bat """
-                    set PATH=C:\\ninja;C:\\Program Files (x86)\\Arm\\GNU Toolchain mingw-w64-i686-arm-none-eabi\\bin;%PATH%
+                    
 
                     call tools\\launch.bat %BUILD_TARGET% debug gcc-arm-none-eabi-10.2.1
                     if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
