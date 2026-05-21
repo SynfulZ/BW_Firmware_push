@@ -42,43 +42,42 @@ pipeline {
 }
 
         // ── 3. Compute SHA256 + version ──────────────────────────────────────
-        stage('Compute SHA256 and Version') {
-            steps {
-                script {
-                    def img = bat(
-                        script: "dir /s /b %OUT_DIR%\\*.img",
-                        returnStdout: true
-                    ).trim().readLines().last()
+   stage('Compute SHA256 and Version') {
+    steps {
+        script {
+            def img = bat(
+                script: "dir /s /b %OUT_DIR%\\*.img",
+                returnStdout: true
+            ).trim().readLines().last()
 
-                    echo "Found IMG: ${img}"
+            echo "Found IMG: ${img}"
 
-                    def sha = bat(
-                        script: "certutil -hashfile \"${img}\" SHA256 | findstr /v hash | findstr /v CertUtil",
-                        returnStdout: true
-                    ).trim().replaceAll("\\s", "").toLowerCase()
+            def sha = bat(
+                script: "certutil -hashfile \"${img}\" SHA256",
+                returnStdout: true
+            ).trim().readLines()[1].trim().toLowerCase()
 
-                    echo "SHA256: ${sha}"
+            echo "SHA256: ${sha}"
 
-                    def version = bat(
-                        script: "git describe --tags --always --dirty",
-                        returnStdout: true
-                    ).trim().readLines().last()
+            def version = bat(
+                script: "\"C:\\Users\\Swastik Sharma\\AppData\\Local\\Programs\\Git\\cmd\\git.exe\" describe --tags --always --dirty",
+                returnStdout: true
+            ).trim().readLines().last()
 
-                    echo "Version: ${version}"
+            echo "Version: ${version}"
 
-                    def fname = img.tokenize('\\').last()
+            def fname = img.tokenize('\\').last()
 
-                    env.IMG_PATH     = img
-                    env.IMG_NAME     = fname
-                    env.OTA_SHA      = sha
-                    env.OTA_VERSION  = version
-                    env.FIRMWARE_URL = "https://${env.NGROK_DOMAIN}/job/${env.JENKINS_JOB}/lastSuccessfulBuild/artifact/${env.OUT_DIR}/${fname}"
+            env.IMG_PATH     = img
+            env.IMG_NAME     = fname
+            env.OTA_SHA      = sha
+            env.OTA_VERSION  = version
+            env.FIRMWARE_URL = "https://${env.NGROK_DOMAIN}/job/${env.JENKINS_JOB}/lastSuccessfulBuild/artifact/${env.OUT_DIR}/${fname}"
 
-                    echo "Firmware URL: ${env.FIRMWARE_URL}"
-                }
-            }
+            echo "Firmware URL: ${env.FIRMWARE_URL}"
         }
-
+    }
+}
         // ── 4. Archive .img as Jenkins artifact ──────────────────────────────
         stage('Archive Firmware') {
             steps {
